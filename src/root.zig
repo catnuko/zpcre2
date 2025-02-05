@@ -2,7 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const testing = std.testing;
 
-const re = @cImport({
+pub const re = @cImport({
     @cDefine("PCRE2_CODE_UNIT_WIDTH", "8");
     @cInclude("pcre2.h");
 });
@@ -11,31 +11,32 @@ const PCRE2_ZERO_TERMINATED = ~@as(re.PCRE2_SIZE, 0);
 pub const Regex = struct {
     regex: *re.pcre2_code_8,
     matchData: *re.pcre2_match_data_8,
-    capture_count: usize,
+    capture_count: usize = 0,
+    pattern:[]const u8,
 
     pub const RegexError = error{ CompileError, ExecError } || std.mem.Allocator.Error;
 
     pub fn compile(
-        pattern: [:0]const u8,
+        pattern: []const u8,
     ) RegexError!Regex {
         var errornumber: c_int = undefined;
         var erroroffset: re.PCRE2_SIZE = undefined;
 
         const regex = re.pcre2_compile_8(pattern.ptr, PCRE2_ZERO_TERMINATED, 0, &errornumber, &erroroffset, null) orelse {
-            std.debug.print("Error: errorcode {d} at offset {d}\n", .{ errornumber, erroroffset });
+            // std.debug.print("Error: errorcode {d} at offset {d}\n", .{ errornumber, erroroffset });
             return RegexError.CompileError;
         };
 
         const matchData = re.pcre2_match_data_create_from_pattern_8(regex, null) orelse {
-            std.debug.print("Error: create match data error\n", .{});
+            // std.debug.print("Error: create match data error\n", .{});
             return RegexError.CompileError;
         };
 
         var capture_count: c_int = undefined;
         const fullinfo_rc = re.pcre2_pattern_info_8(regex, re.PCRE2_INFO_CAPTURECOUNT, &capture_count);
         if (fullinfo_rc != 0) @panic("could not request PCRE2_INFO_CAPTURECOUNT");
-
         return Regex{
+            .pattern = pattern,
             .regex = regex,
             .matchData = matchData,
             .capture_count = @as(usize, @intCast(capture_count)),
@@ -47,17 +48,17 @@ pub const Regex = struct {
         re.pcre2_code_free_8(self.regex);
     }
 
-    pub fn match(self: *const Regex, allocator: std.mem.Allocator, s: []const u8) RegexError![]?Capture {
+    pub fn match(self: *const Regex, allocator: std.mem.Allocator, s: []const u8) ?[]?Capture {
         const rc = re.pcre2_match_8(self.regex, s.ptr, s.len, 0, 0, self.matchData, null);
         if (rc == re.PCRE2_ERROR_NOMATCH) {
-            std.debug.print("no match\n", .{});
-            return RegexError.ExecError;
+            // std.debug.print("no match\n", .{});
+            return null;
         } else if (rc < 0) {
-            std.debug.print("matching error\n", .{});
-            return RegexError.ExecError;
+            // std.debug.print("matching error\n", .{});
+            return null;
         } else {
             const ovector = re.pcre2_get_ovector_pointer_8(self.matchData);
-            const caps: []?Capture = try allocator.alloc(?Capture, self.capture_count + 1);
+            const caps: []?Capture = allocator.alloc(?Capture, self.capture_count + 1) catch unreachable;
             errdefer allocator.free(caps);
             for (caps, 0..) |*cap, i| {
                 if (i >= rc) {
@@ -90,7 +91,7 @@ test "compiles" {
 test "match" {
     const regex = try Regex.compile("hello");
     defer regex.deinit();
-    const caps = try regex.match(std.testing.allocator, "hello");
+    const caps = regex.match(std.testing.allocator, "hello") orelse unreachable;
     defer std.testing.allocator.free(caps);
     try testing.expect(caps.len == 1);
 }
@@ -98,7 +99,7 @@ test "match" {
 test "captures" {
     const regex = try Regex.compile("(a+)b(c+)");
     defer regex.deinit();
-    const captures = try regex.match(std.testing.allocator, "aaaaabcc");
+    const captures =  regex.match(std.testing.allocator, "aaaaabcc")  orelse unreachable;
     defer std.testing.allocator.free(captures);
     try testing.expectEqualSlices(?Capture, &[_]?Capture{
         .{
@@ -119,7 +120,7 @@ test "captures" {
 test "missing capture group" {
     const regex = try Regex.compile("abc(def)(ghi)?(jkl)");
     defer regex.deinit();
-    const captures = try regex.match(std.testing.allocator, "abcdefjkl");
+    const captures =  regex.match(std.testing.allocator, "abcdefjkl") orelse unreachable;
     defer std.testing.allocator.free(captures);
     try testing.expectEqualSlices(?Capture, &[_]?Capture{
         .{
@@ -141,7 +142,7 @@ test "missing capture group" {
 test "missing capture group at end of capture list" {
     const regex = try Regex.compile("abc(def)(ghi)?jkl");
     defer regex.deinit();
-    const captures = try regex.match(std.testing.allocator, "abcdefjkl");
+    const captures =  regex.match(std.testing.allocator, "abcdefjkl")  orelse unreachable;
     defer std.testing.allocator.free(captures);
     try testing.expectEqualSlices(?Capture, &[_]?Capture{
         .{
@@ -163,7 +164,7 @@ test "what" {
     const line =
         "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" ++
         "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
-       const caps =  try regex.match(std.testing.allocator,line);
+       const caps =   regex.match(std.testing.allocator,line)  orelse unreachable;
        defer std.testing.allocator.free(caps);
     try testing.expect(caps.len != 0);
 }
