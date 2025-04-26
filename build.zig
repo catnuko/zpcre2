@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
     });
     root_mod.linkLibrary(pcre2.artifact("pcre2-8"));
 
-    const lib = b.addExecutable(.{
+    const lib = b.addStaticLibrary(.{
         .name = "zpcre2",
         .root_source_file = b.path("src/root.zig"),
         .target = target,
